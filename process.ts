@@ -1,8 +1,10 @@
 import { spawn, ChildProcess, SpawnOptions } from "child_process";
-import { EventEmitter } from "events"
-import { Client, ExecOptions, PseudoTtyOptions, X11Options, ClientChannel, ConnectConfig } from "ssh2"
+import { EventEmitter } from "events";
+import { Client, ExecOptions, PseudoTtyOptions, X11Options, ClientChannel, ConnectConfig } from "ssh2";
 import { ReadStream } from "fs";
 import { Readable, Writable } from "stream";
+
+export  { PseudoTtyOptions, X11Options, ConnectConfig } from "ssh2"
 
 export interface RunOptions extends SpawnOptions { // ExecOptions
     /** Set to `true` to allocate a pseudo-tty with defaults, or an object containing specific pseudo-tty settings. */
