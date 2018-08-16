@@ -1,0 +1,7 @@
+node_modules
+.sonarlint
+index.ts
+process.ts
+tsconfig.json
+.gitignore
+.npmignore
