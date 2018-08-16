@@ -11,6 +11,9 @@ export interface RunOptions extends SpawnOptions { // ExecOptions
     pty?: true | PseudoTtyOptions;
     /** Set either to `true` to use defaults, a number to specify a specific screen number, or an object containing x11 settings. */
     x11?: boolean | number | X11Options;
+
+    collectTimeout?: number;
+    collectTries?: number;
 }
 
 export interface Process extends EventEmitter {
@@ -23,6 +26,7 @@ export interface Process extends EventEmitter {
 export interface Executor {
     execute(command: string, params: string[], runOptions?: RunOptions): Process;
     collect(command: string, params: string[], runOptions?: RunOptions): Promise< ProcessResult >;
+    collectJSON(command: string, params: string[], runOptions?: RunOptions): Promise< any >;
     close(): void;
 }
 
@@ -54,13 +58,41 @@ class ExecutorImpl implements Executor {
         this.closeFunction.call(this);
     }
 
+    public collectJSON(command: string, params: string[], runOptions?: RunOptions): Promise< any > {
+        let options = runOptions || {};
+        let tries = options.collectTries || 10;
+        const collectTimeout = options.collectTimeout || 100;
+        return this.collect(command, params, options).then((result) => new Promise<string[]>((res, rej) => {
+            function checkResult() {
+                try {
+                    res(JSON.parse(result.out.join("\n")));
+                } catch (err) {
+                    if(--tries <= 0) {
+                        rej(err);
+                    }
+                }
+                setTimeout(collectTimeout, 100);
+            }
+            checkResult();
+        }));
+    }
+
     public collect(command: string, params: string[], runOptions?: RunOptions): Promise< ProcessResult > {
+        let options = runOptions || {};
+        const collectTimeout = options.collectTimeout || 100;
         return new Promise((res, rej) => {
-            const process: Process = this.execute(command, params, runOptions);
+            const process: Process = this.execute(command, params, options);
             const outBuffer: string[] = [];
             const errBuffer: string[] = [];
-            process.on("out", (line) => outBuffer.push(line));
-            process.on("err", (line) => errBuffer.push(line));
+            let lastWrite = 0;
+            process.on("out", (line) => {
+                outBuffer.push(line);
+                lastWrite = new Date().valueOf();
+            });
+            process.on("err", (line) => {
+                errBuffer.push(line);
+                lastWrite = new Date().valueOf();
+            });
             process.on("close", (code, signal) => {
                 const result: ProcessResult = {
                     code,
@@ -68,11 +100,19 @@ class ExecutorImpl implements Executor {
                     err: errBuffer,
                     out: outBuffer,
                 };
-                if(code != 0) {
-                    rej(result);
-                } else {
-                    res(result);
+                function isDone() {
+                    let sinceLastWrite = new Date().valueOf() - lastWrite;
+                    if(sinceLastWrite > collectTimeout) {
+                        if(code != 0) {
+                            rej(result);
+                        } else {
+                            res(result);
+                        }
+                    } else {
+                        setTimeout(isDone, collectTimeout - sinceLastWrite);
+                    }
                 }
+                setTimeout(isDone, collectTimeout);
             });
         });
     }
