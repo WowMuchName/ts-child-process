@@ -14,13 +14,68 @@ export interface RunOptions extends SpawnOptions { // ExecOptions
 }
 
 export interface Process extends EventEmitter {
-    on(event: "out" | "err", callback: (line: string) => void): this;
-    on(event: "close", callback: (code: number, signal: string) => void): this;
+    on(event: "out" | "err", callback: (this: Process, line: string) => void): this;
+    on(event: "close", callback: (this: Process, code: number, signal: string) => void): this;
     stdin: Writable;
+    executor: Executor;
 }
 
 export interface Executor {
     execute(command: string, params: string[], runOptions?: RunOptions): Process;
+    collect(command: string, params: string[], runOptions?: RunOptions): Promise< ProcessResult >;
+    close(): void;
+}
+
+export interface ProcessResult {
+    signal ?: string;
+    code: number;
+    out: string[];
+    err: string[];
+}
+
+class ProcessImpl extends EventEmitter implements Process {
+    constructor(public executor: Executor) {
+        super();
+    }
+    public stdin: Writable = undefined as any;
+}
+
+class ExecutorImpl implements Executor {
+    constructor(
+        private executeFunction: (this: Executor, command: string, params: string[], runOptions?: RunOptions) => Process,
+        private closeFunction: (this: Executor) => void = () => {},
+    ){}
+
+    public execute(command: string, params: string[], runOptions?: RunOptions): Process {
+        return this.executeFunction.call(this, command, params, runOptions);
+    }
+
+    public close(): void {
+        this.closeFunction.call(this);
+    }
+
+    public collect(command: string, params: string[], runOptions?: RunOptions): Promise< ProcessResult > {
+        return new Promise((res, rej) => {
+            const process: Process = this.execute(command, params, runOptions);
+            const outBuffer: string[] = [];
+            const errBuffer: string[] = [];
+            process.on("out", (line) => outBuffer.push(line));
+            process.on("err", (line) => errBuffer.push(line));
+            process.on("close", (code, signal) => {
+                const result: ProcessResult = {
+                    code,
+                    signal,
+                    err: errBuffer,
+                    out: outBuffer,
+                };
+                if(code != 0) {
+                    rej(result);
+                } else {
+                    res(result);
+                }
+            });
+        });
+    }
 }
 
 export function executor(remoteConnectionConfig ?: ConnectConfig): Promise<Executor> {
@@ -28,51 +83,47 @@ export function executor(remoteConnectionConfig ?: ConnectConfig): Promise<Execu
         if(remoteConnectionConfig) {
             const client = new Client();
             client.on("ready", () => {
-                res({
-                    execute: (command: string, params: string[], runOptions?: RunOptions): Process => {
-                        const emitter: Process = new EventEmitter() as Process;
-                        const options: RunOptions = runOptions || {};
-                        const fullCommand = command + (params.length != 0 ? " " + params.join(" ") : "");
-                        function doCommand() {
-                            if(!client.exec(fullCommand, {
-                                env: options.env,
-                                pty: options.pty,
-                                x11: options.x11,
-                            }, (err: Error, channel: ClientChannel) => {
-                                channel.on('exit', (code, signal) => {
-                                    emitter.emit("close", code, signal);
-                                })
-                                .on('data', buffer(emitter, "out"))
-                                .stderr.on('data', buffer(emitter, "err"));
-                                emitter.stdin = channel.stdin;
-                            })){
-                                setTimeout(doCommand, 100);
-                            }
+                res(new ExecutorImpl(function (command: string, params: string[], runOptions?: RunOptions): Process {
+                    const emitter: Process = new ProcessImpl(this);
+                    const options: RunOptions = runOptions || {};
+                    const fullCommand = command + (params.length != 0 ? " " + params.join(" ") : "");
+                    function doCommand() {
+                        if(!client.exec(fullCommand, {
+                            env: options.env,
+                            pty: options.pty,
+                            x11: options.x11,
+                        }, (err: Error, channel: ClientChannel) => {
+                            channel.on('exit', (code, signal) => {
+                                emitter.emit("close", code, signal);
+                            })
+                            .on('data', buffer(emitter, "out"))
+                            .stderr.on('data', buffer(emitter, "err"));
+                            emitter.stdin = channel.stdin;
+                        })){
+                            setTimeout(doCommand, 100);
                         }
-                        doCommand();
-                        return emitter as any;
                     }
-                });
+                    doCommand();
+                    return emitter;
+                }, () => client.end()));
             });
             client.connect(remoteConnectionConfig);
         } else {
-            res({
-                execute: (command: string, params: string[], runOptions?: RunOptions): Process => {
-                    const emitter: Process = new EventEmitter() as Process;
-                    const options: RunOptions = runOptions || {};
-                    const process = spawn(command, params, options);
-                    process.stdout.on('data', buffer(emitter, "out"));
-                    process.stderr.on('data', buffer(emitter, "err"));
-                    process.on("error", (err: Error) => {
-                        emitter.emit("error", err);
-                    });
-                    process.on('close', (code, signal) => {
-                        emitter.emit("close", code, signal);
-                    });
-                    emitter.stdin = process.stdin;
-                    return emitter;
-                }
-            });
+            res(new ExecutorImpl(function (command: string, params: string[], runOptions?: RunOptions): Process {
+                const emitter: Process = new ProcessImpl(this);
+                const options: RunOptions = runOptions || {};
+                const process = spawn(command, params, options);
+                process.stdout.on('data', buffer(emitter, "out"));
+                process.stderr.on('data', buffer(emitter, "err"));
+                process.on("error", (err: Error) => {
+                    emitter.emit("error", err);
+                });
+                process.on('close', (code, signal) => {
+                    emitter.emit("close", code, signal);
+                });
+                emitter.stdin = process.stdin;
+                return emitter;
+            }));
         }
     });
 }

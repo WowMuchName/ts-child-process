@@ -1,6 +1,6 @@
 {
   "name": "ts-child-process",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Asynchronously execute child-processes on the local or a remote machine.",
   "keywords": [
     "ssh",
