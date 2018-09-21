@@ -1,6 +1,6 @@
 {
   "name": "ts-child-process",
-  "version": "0.0.3",
+  "version": "0.0.5",
   "description": "Asynchronously execute child-processes on the local or a remote machine.",
   "keywords": [
     "ssh",
@@ -11,7 +11,7 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "devDependencies": {
-    "typescript": "^3.0.1"
+    "typescript": "^3.0.3"
   },
   "author": "mark.albert@pbforge.com",
   "license": "MIT",

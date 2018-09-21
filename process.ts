@@ -24,9 +24,9 @@ export interface Process extends EventEmitter {
 }
 
 export interface Executor {
-    execute(command: string, params: string[], runOptions?: RunOptions): Process;
-    collect(command: string, params: string[], runOptions?: RunOptions): Promise< ProcessResult >;
-    collectJSON(command: string, params: string[], runOptions?: RunOptions): Promise< any >;
+    execute(command: string[], runOptions?: RunOptions): Process;
+    collect(command: string[], runOptions?: RunOptions): Promise< ProcessResult >;
+    collectJSON(command: string[], runOptions?: RunOptions): Promise< any >;
     close(): void;
 }
 
@@ -46,23 +46,32 @@ class ProcessImpl extends EventEmitter implements Process {
 
 class ExecutorImpl implements Executor {
     constructor(
-        private executeFunction: (this: Executor, command: string, params: string[], runOptions?: RunOptions) => Process,
+        private executeFunction: (this: Executor, command: string[], runOptions?: RunOptions) => Process,
         private closeFunction: (this: Executor) => void = () => {},
     ){}
 
-    public execute(command: string, params: string[], runOptions?: RunOptions): Process {
-        return this.executeFunction.call(this, command, params, runOptions);
+    public execute(command: string[], runOptions?: RunOptions): Process {
+        for(let i=0; i<command.length; i++) {
+            if((command[i].startsWith('"') && command[i].endsWith('"'))
+                || (command[i].startsWith("'") && command[i].endsWith("'"))
+                || command[i].indexOf(" ") == -1) {
+                continue;
+            }
+            command[i] = '"' + command[i]
+                .replace(/\"/g, "\\\"") + '"';
+        }
+        return this.executeFunction.call(this, command, runOptions);
     }
 
     public close(): void {
         this.closeFunction.call(this);
     }
 
-    public collectJSON(command: string, params: string[], runOptions?: RunOptions): Promise< any > {
+    public collectJSON(command: string[], runOptions?: RunOptions): Promise< any > {
         let options = runOptions || {};
         let tries = options.collectTries || 10;
         const collectTimeout = options.collectTimeout || 100;
-        return this.collect(command, params, options).then((result) => new Promise<string[]>((res, rej) => {
+        return this.collect(command, options).then((result) => new Promise<string[]>((res, rej) => {
             function checkResult() {
                 try {
                     res(JSON.parse(result.out.join("\n")));
@@ -71,17 +80,17 @@ class ExecutorImpl implements Executor {
                         rej(err);
                     }
                 }
-                setTimeout(collectTimeout, 100);
+                setTimeout(checkResult, collectTimeout);
             }
             checkResult();
         }));
     }
 
-    public collect(command: string, params: string[], runOptions?: RunOptions): Promise< ProcessResult > {
+    public collect(command: string[], runOptions?: RunOptions): Promise< ProcessResult > {
         let options = runOptions || {};
         const collectTimeout = options.collectTimeout || 100;
         return new Promise((res, rej) => {
-            const process: Process = this.execute(command, params, options);
+            const process: Process = this.execute(command, options);
             const outBuffer: string[] = [];
             const errBuffer: string[] = [];
             let lastWrite = 0;
@@ -123,16 +132,20 @@ export function executor(remoteConnectionConfig ?: ConnectConfig): Promise<Execu
         if(remoteConnectionConfig) {
             const client = new Client();
             client.on("ready", () => {
-                res(new ExecutorImpl(function (command: string, params: string[], runOptions?: RunOptions): Process {
+                res(new ExecutorImpl(function (command: string[], runOptions?: RunOptions): Process {
                     const emitter: Process = new ProcessImpl(this);
                     const options: RunOptions = runOptions || {};
-                    const fullCommand = command + (params.length != 0 ? " " + params.join(" ") : "");
+                    const fullCommand = command.join(" ");
                     function doCommand() {
                         if(!client.exec(fullCommand, {
                             env: options.env,
                             pty: options.pty,
                             x11: options.x11,
                         }, (err: Error, channel: ClientChannel) => {
+                            if(err) {
+                                emitter.emit("error", err);
+                                return;
+                            }
                             channel.on('exit', (code, signal) => {
                                 emitter.emit("close", code, signal);
                             })
@@ -149,10 +162,10 @@ export function executor(remoteConnectionConfig ?: ConnectConfig): Promise<Execu
             });
             client.connect(remoteConnectionConfig);
         } else {
-            res(new ExecutorImpl(function (command: string, params: string[], runOptions?: RunOptions): Process {
+            res(new ExecutorImpl(function (command: string[], runOptions?: RunOptions): Process {
                 const emitter: Process = new ProcessImpl(this);
                 const options: RunOptions = runOptions || {};
-                const process = spawn(command, params, options);
+                const process = spawn(command.join(" "), [], options);
                 process.stdout.on('data', buffer(emitter, "out"));
                 process.stderr.on('data', buffer(emitter, "err"));
                 process.on("error", (err: Error) => {
