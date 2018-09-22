@@ -74,7 +74,7 @@ class ExecutorImpl implements Executor {
         return this.collect(command, options).then((result) => new Promise<string[]>((res, rej) => {
             function checkResult() {
                 try {
-                    res(JSON.parse(result.out.join("\n")));
+                    return res(JSON.parse(result.out.join("\n")));
                 } catch (err) {
                     if(--tries <= 0) {
                         rej(err);
